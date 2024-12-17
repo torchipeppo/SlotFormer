@@ -147,8 +147,12 @@ class PHYREDataset(Dataset):
             self.phyre_transform(self._preproc_img(img)) for img in images
         ]
         label = int(sim.status == 1)  # 1: success, 0: fail
-        assert label == self.act_labels[idx], \
-            'simulated label does not match pre-generated label'
+        # assert label == self.act_labels[idx], \
+        #     'simulated label does not match pre-generated label'
+        # The above can fail randomly: if it fails, author suggests to use cached,
+        # if it's okay, then this line has no effect anyway.
+        #  Source: https://github.com/pairlab/SlotFormer/issues/13
+        label = self.act_labels[idx]
         data_dict = {
             'video': torch.stack(frames, dim=0),  # [T, C, H, W]
             'data_idx': idx,

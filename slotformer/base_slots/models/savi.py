@@ -53,7 +53,7 @@ class SlotAttention(nn.Module):
             nn.Linear(self.mlp_hidden_size, self.slot_size),
         )
 
-    def forward(self, inputs, slots):
+    def forward(self, inputs, slots, *, need_attn=False):
         """Forward function.
 
         Args:
@@ -82,6 +82,7 @@ class SlotAttention(nn.Module):
             attn_logits = self.attn_scale * torch.einsum('bnc,bmc->bnm', k, q)
             attn = F.softmax(attn_logits, dim=-1)
             # `attn` has shape: [B, num_inputs, num_slots].
+            attn_to_return = attn
 
             # Normalize along spatial dim and do weighted mean.
             attn = attn + self.eps
@@ -99,7 +100,10 @@ class SlotAttention(nn.Module):
             slots = slots.view(bs, self.num_slots, self.slot_size)
             slots = slots + self.mlp(slots)
 
-        return slots
+        if need_attn:
+            return slots, attn_to_return
+        else:
+            return slots
 
     @property
     def dtype(self):
@@ -376,7 +380,7 @@ class StoSAVi(BaseModel):
         # `encoder_out` has shape: [B, H*W, enc_out_channels]
         return encoder_out
 
-    def encode(self, img, prev_slots=None):
+    def encode(self, img, prev_slots=None, *, need_attn=False):
         """Encode from img to slots."""
         B, T, C, H, W = img.shape
         img = img.flatten(0, 1)
@@ -389,7 +393,7 @@ class StoSAVi(BaseModel):
         init_latents = self.init_latents.repeat(B, 1, 1)  # [B, N, C]
 
         # apply SlotAttn on video frames via reusing slots
-        all_kernel_dist, all_post_slots = [], []
+        all_kernel_dist, all_post_slots, all_attn = [], [], []
         for idx in range(T):
             # init
             if prev_slots is None:
@@ -403,8 +407,9 @@ class StoSAVi(BaseModel):
             all_kernel_dist.append(kernel_dist)
 
             # perform SA to get `post_slots`
-            post_slots = self.slot_attention(encoder_out[:, idx], kernels)
+            post_slots, attn = self.slot_attention(encoder_out[:, idx], kernels, need_attn=True)
             all_post_slots.append(post_slots)
+            all_attn.append(attn)
 
             # next timestep
             prev_slots = post_slots
@@ -412,8 +417,12 @@ class StoSAVi(BaseModel):
         # (B, T, self.num_slots, self.slot_size)
         kernel_dist = torch.stack(all_kernel_dist, dim=1)
         post_slots = torch.stack(all_post_slots, dim=1)
+        attn = torch.stack(all_attn, dim=1)
 
-        return kernel_dist, post_slots, encoder_out
+        if need_attn:
+            return kernel_dist, post_slots, encoder_out, attn
+        else:
+            return kernel_dist, post_slots, encoder_out
 
     def _reset_rnn(self):
         self.predictor.reset()
@@ -475,14 +484,15 @@ class StoSAVi(BaseModel):
             self._reset_rnn()
 
         B, T = img.shape[:2]
-        kernel_dist, post_slots, encoder_out = \
-            self.encode(img, prev_slots=prev_slots)
+        kernel_dist, post_slots, encoder_out, attn = \
+            self.encode(img, prev_slots=prev_slots, need_attn=True)
         # `slots` has shape: [B, T, self.num_slots, self.slot_size]
 
         out_dict = {
             'post_slots': post_slots,  # [B, T, num_slots, C]
             'kernel_dist': kernel_dist,  # [B, T, num_slots, 2C]
             'img': img,  # [B, T, 3, H, W]
+            'attn': attn,
         }
         if self.testing:
             return out_dict

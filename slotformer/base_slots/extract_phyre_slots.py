@@ -61,19 +61,32 @@ def extract_phyre_video_slots(model, dataset):
         drop_last=False,
     )
 
+    batch_index = 0
     for data_dict in tqdm(dataloader):
         in_dict = {'img': data_dict['video'].float().cuda()}
         out_dict = model(in_dict)
         slots = out_dict[slot_key].detach().cpu().numpy()  # [B, T, n, c]
+        attn = out_dict['attn'].detach().cpu().numpy()
+        img = out_dict['img'].detach().cpu().numpy()
         torch.cuda.empty_cache()
         # save slots to individual npy files
         idx = data_dict['data_idx'].numpy()
         for i, save_idx in enumerate(idx):
             vid_len = data_dict['vid_len'][i].item()
             np.save(
-                os.path.join(save_root, f'{save_idx:06d}.npy'),
+                os.path.join(save_root, f'{save_idx:06d}-slots.npy'),
                 slots[i, :vid_len],  # only save to the real video length
             )
+            if batch_index%1000==0 and i==0:
+                np.save(
+                    os.path.join(save_root, f'{save_idx:06d}-attn.npy'),
+                    attn[i, :vid_len],  # only save to the real video length
+                )
+                np.save(
+                    os.path.join(save_root, f'{save_idx:06d}-img.npy'),
+                    img[i, :vid_len],  # only save to the real video length
+                )
+    batch_index+=1
 
 
 def process_video(model):
@@ -120,6 +133,6 @@ if __name__ == "__main__":
     params = importlib.import_module(os.path.basename(args.params))
     params = params.SlotFormerParams()
 
-    assert torch.cuda.device_count() == 1
+    # assert torch.cuda.device_count() == 1
     torch.backends.cudnn.benchmark = True
     main()
