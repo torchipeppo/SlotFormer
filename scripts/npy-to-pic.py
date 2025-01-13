@@ -44,7 +44,7 @@ def save_gif(video, masked, fpath):
     imageio.mimwrite(fpath, frames, format="gif")
 
 
-paths = list((REPO_ROOT / "data/PHYRE/slots/savi_phyre_params-fold0").rglob("*-attn.npy"))
+paths = list((REPO_ROOT / "data/PHYRE_trained_by_me/slots/savi_phyre_params-fold0").rglob("*-attn.npy"))
 for attn_path in tqdm.tqdm(paths):
     idx = attn_path.stem.split("-")[0]
     img_path = attn_path.with_name(f"{idx}-img.npy")

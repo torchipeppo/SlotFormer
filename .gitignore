@@ -3,7 +3,7 @@ wandb/
 data/OBJ3D
 data/CLEVRER
 data/Physion
-data/PHYRE
+data/PHYRE*
 data/*.pkl
 pretrained/*/
 pretrained/*.pth

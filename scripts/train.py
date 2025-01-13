@@ -89,6 +89,9 @@ if __name__ == "__main__":
 
     # import `build_dataset/model/method` function according to `args.task`
     print(f'INFO: training model in {args.task} task!')
+    for path in sys.path:
+        if path.endswith("/scripts"):
+            sys.path.append(path[:-8])
     task = importlib.import_module(f'slotformer.{args.task}')
     build_dataset = task.build_dataset
     build_model = task.build_model

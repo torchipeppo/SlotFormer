@@ -1,0 +1,5 @@
+pycocotools==2.0.5
+scikit-image==0.19.3
+lpips==0.1.4
+einops==0.3.2
+phyre==0.2.2
