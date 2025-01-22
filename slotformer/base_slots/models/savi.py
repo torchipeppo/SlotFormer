@@ -12,6 +12,8 @@ from .utils import assert_shape, SoftPositionEmbed, torch_cat
 from .predictor import ResidualMLPPredictor, TransformerPredictor, \
     RNNPredictorWrapper
 
+from .vqvae_tokenizer import Tokenizer, Encoder, Decoder, EncoderDecoderConfig
+
 
 class SlotAttention(nn.Module):
     """Slot attention module that iteratively performs cross-attention."""
@@ -170,6 +172,9 @@ class StoSAVi(BaseModel):
         self.loss_dict = loss_dict
 
         self._build_slot_attention()
+        self._build_tokenizer() # l'idea è che per un po' li tengo entrambi
+                                # per assicurarmi di far coincidere le shape,
+                                # ma in realtà questo deve sostituire l'encoder
         self._build_encoder()
         self._build_decoder()
         self._build_predictor()
@@ -222,36 +227,39 @@ class StoSAVi(BaseModel):
         )
 
     def _build_encoder(self):
-        # Build Encoder
-        # Conv CNN --> PosEnc --> MLP
-        self.enc_channels = list(self.enc_dict['enc_channels'])  # CNN channels
-        self.enc_ks = self.enc_dict['enc_ks']  # kernel size in CNN
-        self.enc_norm = self.enc_dict['enc_norm']  # norm in CNN
-        self.visual_resolution = (64, 64)  # CNN out visual resolution
-        self.visual_channels = self.enc_channels[-1]  # CNN out visual channels
+        # # Build Encoder
+        # # Conv CNN --> PosEnc --> MLP
+        # self.enc_channels = list(self.enc_dict['enc_channels'])  # CNN channels
+        # self.enc_ks = self.enc_dict['enc_ks']  # kernel size in CNN
+        # self.enc_norm = self.enc_dict['enc_norm']  # norm in CNN
+        # self.visual_resolution = (64, 64)  # CNN out visual resolution
+        # self.visual_channels = self.enc_channels[-1]  # CNN out visual channels
 
-        enc_layers = len(self.enc_channels) - 1
-        self.encoder = nn.Sequential(*[
-            conv_norm_act(
-                self.enc_channels[i],
-                self.enc_channels[i + 1],
-                kernel_size=self.enc_ks,
-                # 2x downsampling for 128x128 image
-                stride=2 if (i == 0 and self.resolution[0] == 128) else 1,
-                norm=self.enc_norm,
-                act='relu' if i != (enc_layers - 1) else '')
-            for i in range(enc_layers)
-        ])  # relu except for the last layer
+        # # TODO ONGOING sostituire questo col VQVAE
 
-        # Build Encoder related modules
-        self.encoder_pos_embedding = SoftPositionEmbed(self.visual_channels,
-                                                       self.visual_resolution)
-        self.encoder_out_layer = nn.Sequential(
-            nn.LayerNorm(self.visual_channels),
-            nn.Linear(self.visual_channels, self.enc_out_channels),
-            nn.ReLU(),
-            nn.Linear(self.enc_out_channels, self.enc_out_channels),
-        )
+        # enc_layers = len(self.enc_channels) - 1
+        # self.encoder = nn.Sequential(*[
+        #     conv_norm_act(
+        #         self.enc_channels[i],
+        #         self.enc_channels[i + 1],
+        #         kernel_size=self.enc_ks,
+        #         # 2x downsampling for 128x128 image
+        #         stride=2 if (i == 0 and self.resolution[0] == 128) else 1,
+        #         norm=self.enc_norm,
+        #         act='relu' if i != (enc_layers - 1) else '')
+        #     for i in range(enc_layers)
+        # ])  # relu except for the last layer
+
+        # # Build Encoder related modules
+        # self.encoder_pos_embedding = SoftPositionEmbed(self.visual_channels,
+        #                                                self.visual_resolution)
+        # self.encoder_out_layer = nn.Sequential(
+        #     nn.LayerNorm(self.visual_channels),
+        #     nn.Linear(self.visual_channels, self.enc_out_channels),
+        #     nn.ReLU(),
+        #     nn.Linear(self.enc_out_channels, self.enc_out_channels),
+        # )
+        pass
 
     def _build_decoder(self):
         # Build Decoder
@@ -295,6 +303,12 @@ class StoSAVi(BaseModel):
         self.decoder = nn.Sequential(*modules)
         self.decoder_pos_embedding = SoftPositionEmbed(self.slot_size,
                                                        self.dec_resolution)
+
+    def _build_tokenizer(self):                          # was 512 but keeps going OOM
+        encoderdecoderconfig = EncoderDecoderConfig(64, 3, 256, 64, [1,1,1,1,1], 2, [8,16], 3, 0) 
+        encoder = Encoder(encoderdecoderconfig)
+        decoder = Decoder(encoderdecoderconfig)
+        self.tokenizer = Tokenizer(50304, self.enc_dict["enc_out_channels"], encoder, decoder)
 
     def _build_predictor(self):
         """Predictor as in SAVi to transition slot from time t to t+1."""
@@ -370,15 +384,24 @@ class StoSAVi(BaseModel):
 
     def _get_encoder_out(self, img):
         """Encode image, potentially add pos enc, apply MLP."""
-        encoder_out = self.encoder(img).type(self.dtype)
-        encoder_out = self.encoder_pos_embedding(encoder_out)
-        # `encoder_out` has shape: [B, C, H, W]
-        encoder_out = torch.flatten(encoder_out, start_dim=2, end_dim=3)
-        # `encoder_out` has shape: [B, C, H*W]
-        encoder_out = encoder_out.permute(0, 2, 1).contiguous()
-        encoder_out = self.encoder_out_layer(encoder_out)
-        # `encoder_out` has shape: [B, H*W, enc_out_channels]
-        return encoder_out
+        # encoder_out = self.encoder(img).type(self.dtype)
+        # encoder_out = self.encoder_pos_embedding(encoder_out)
+        # # `encoder_out` has shape: [B, C, H, W]
+        # encoder_out = torch.flatten(encoder_out, start_dim=2, end_dim=3)
+        # # `encoder_out` has shape: [B, C, H*W]
+        # encoder_out = encoder_out.permute(0, 2, 1).contiguous()
+        # encoder_out = self.encoder_out_layer(encoder_out)
+        # # `encoder_out` has shape: [B, H*W, enc_out_channels]
+
+        tokenizer_output = self.tokenizer.encode(img)
+        input_tokimg = tokenizer_output.tokens
+        input_tokimg = self.tokenizer.embedding(input_tokimg)
+
+        # print(encoder_out.shape, encoder_out.dtype)
+        # print(input_tokimg.shape, input_tokimg.dtype)
+        # assert encoder_out.shape == input_tokimg.shape
+
+        return input_tokimg
 
     def encode(self, img, prev_slots=None, *, need_attn=False):
         """Encode from img to slots."""
