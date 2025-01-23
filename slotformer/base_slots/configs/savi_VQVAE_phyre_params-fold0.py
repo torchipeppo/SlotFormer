@@ -44,19 +44,19 @@ class SlotFormerParams(BaseParams):
     # so we stick to this value for all folds
     # in Slot-Attention, randomness is necessary to trigger scene decomposition
     # so using a larger batch size may reduce such randomness in the gradients
-    train_batch_size = 32 // gpus
+    train_batch_size = 8 // gpus  # was 32 but OOM
     val_batch_size = int(train_batch_size * 1.5)  # *2 causes OOM, weird...
     num_workers = 8
 
     # model configs
     model = 'StoSAVi'  # we actually use the deterministic version here
-    resolution = (128, 128)
+    resolution = (64, 64)  # was 128, but OOM
     input_frames = n_sample_frames
 
     # Slot Attention
     slot_dict = dict(
         num_slots=8,
-        slot_size=128,
+        slot_size=128,  # was 128 but needs to match VQVAE decoder
         slot_mlp_size=256,
         num_iterations=2,
     )
@@ -65,14 +65,14 @@ class SlotFormerParams(BaseParams):
     enc_dict = dict(
         enc_channels=(3, 64, 64, 64, 64),
         enc_ks=5,
-        enc_out_channels=256,  # was 768, but keeps going OOM
+        enc_out_channels=128,  # was 768, but keeps going OOM
         enc_norm='',
     )
 
     # CNN Decoder
     dec_dict = dict(
         dec_channels=(128, 64, 64, 64, 64),
-        dec_resolution=(16, 16),  # larger size to better capture small objects
+        dec_resolution=(8, 8),  # was 16x16 (larger size to better capture small objects), but w/ VQVAE it needs to match the encoder output. TODO try working w/ 16x16 latent all around, too.
         dec_ks=5,
         dec_norm='',
     )

@@ -262,53 +262,54 @@ class StoSAVi(BaseModel):
         pass
 
     def _build_decoder(self):
-        # Build Decoder
-        # Spatial broadcast --> PosEnc --> DeConv CNN
-        self.dec_channels = self.dec_dict['dec_channels']  # CNN channels
+        # # Build Decoder
+        # # Spatial broadcast --> PosEnc --> DeConv CNN
+        # self.dec_channels = self.dec_dict['dec_channels']  # CNN channels
         self.dec_resolution = self.dec_dict['dec_resolution']  # broadcast size
-        self.dec_ks = self.dec_dict['dec_ks']  # kernel size
-        self.dec_norm = self.dec_dict['dec_norm']  # norm in CNN
-        assert self.dec_channels[0] == self.slot_size, \
-            'wrong in_channels for Decoder'
-        modules = []
-        in_size = self.dec_resolution[0]
-        out_size = in_size
-        stride = 2
-        for i in range(len(self.dec_channels) - 1):
-            if out_size == self.resolution[0]:
-                stride = 1
-            modules.append(
-                deconv_norm_act(
-                    self.dec_channels[i],
-                    self.dec_channels[i + 1],
-                    kernel_size=self.dec_ks,
-                    stride=stride,
-                    norm=self.dec_norm,
-                    act='relu'))
-            out_size = deconv_out_shape(out_size, stride, self.dec_ks // 2,
-                                        self.dec_ks, stride - 1)
+        # self.dec_ks = self.dec_dict['dec_ks']  # kernel size
+        # self.dec_norm = self.dec_dict['dec_norm']  # norm in CNN
+        # assert self.dec_channels[0] == self.slot_size, \
+        #     'wrong in_channels for Decoder'
+        # modules = []
+        # in_size = self.dec_resolution[0]
+        # out_size = in_size
+        # stride = 2
+        # for i in range(len(self.dec_channels) - 1):
+        #     if out_size == self.resolution[0]:
+        #         stride = 1
+        #     modules.append(
+        #         deconv_norm_act(
+        #             self.dec_channels[i],
+        #             self.dec_channels[i + 1],
+        #             kernel_size=self.dec_ks,
+        #             stride=stride,
+        #             norm=self.dec_norm,
+        #             act='relu'))
+        #     out_size = deconv_out_shape(out_size, stride, self.dec_ks // 2,
+        #                                 self.dec_ks, stride - 1)
 
-        assert_shape(
-            self.resolution,
-            (out_size, out_size),
-            message="Output shape of decoder did not match input resolution. "
-            "Try changing `decoder_resolution`.",
-        )
+        # assert_shape(
+        #     self.resolution,
+        #     (out_size, out_size),
+        #     message="Output shape of decoder did not match input resolution. "
+        #     "Try changing `decoder_resolution`.",
+        # )
 
-        # out Conv for RGB and seg mask
-        modules.append(
-            nn.Conv2d(
-                self.dec_channels[-1], 4, kernel_size=1, stride=1, padding=0))
+        # # out Conv for RGB and seg mask
+        # modules.append(
+        #     nn.Conv2d(
+        #         self.dec_channels[-1], 4, kernel_size=1, stride=1, padding=0))
 
-        self.decoder = nn.Sequential(*modules)
-        self.decoder_pos_embedding = SoftPositionEmbed(self.slot_size,
-                                                       self.dec_resolution)
+        # self.decoder = nn.Sequential(*modules)
+        # self.decoder_pos_embedding = SoftPositionEmbed(self.slot_size,
+        #                                                self.dec_resolution)
+        pass
 
-    def _build_tokenizer(self):                          # was 512 but keeps going OOM
-        encoderdecoderconfig = EncoderDecoderConfig(64, 3, 256, 64, [1,1,1,1,1], 2, [8,16], 3, 0) 
-        encoder = Encoder(encoderdecoderconfig)
-        decoder = Decoder(encoderdecoderconfig)
-        self.tokenizer = Tokenizer(50304, self.enc_dict["enc_out_channels"], encoder, decoder)
+    def _build_tokenizer(self):                          # was 512 but keeps going OOM    # out_ch=4 is specifically to also include the mask like the slotformer decoder, this probably means we can't pretrain this beforehand
+        encoderdecoderconfig = EncoderDecoderConfig(64, 3, 256, 64, [1,1,1,1], 2, [32,16], 4, 0) 
+        encoder = Encoder(encoderdecoderconfig).to(self.device)
+        decoder = Decoder(encoderdecoderconfig).to(self.device)
+        self.tokenizer = Tokenizer(50304, self.enc_dict["enc_out_channels"], encoder, decoder).to(self.device)
 
     def _build_predictor(self):
         """Predictor as in SAVi to transition slot from time t to t+1."""
@@ -449,6 +450,16 @@ class StoSAVi(BaseModel):
 
     def _reset_rnn(self):
         self.predictor.reset()
+    
+    def _initial_downsample(self, img):
+        ih = img.shape[-2]
+        rh = self.resolution[0]
+        # check if power of 2  https://stackoverflow.com/questions/108318/how-can-i-test-whether-a-number-is-a-power-of-2
+        assert (ih & (ih - 1)) == 0 and (rh & (rh - 1)) == 0, "Unsupported resolution"
+        while img.shape[-2] > self.resolution[0]:
+            img = F.avg_pool2d(img, kernel_size=(2,2), stride=(2,2))
+        assert img.shape[-2] == self.resolution[0]
+        return img
 
     def forward(self, data_dict):
         """A wrapper for model forward.
@@ -456,6 +467,7 @@ class StoSAVi(BaseModel):
         If the input video is too long in testing, we manually cut it.
         """
         img = data_dict['img']
+        img = self._initial_downsample(img)
         T = img.shape[1]
         if T <= self.clip_len or self.training:
             return self._forward(img, None)
@@ -546,8 +558,7 @@ class StoSAVi(BaseModel):
         decoder_in = decoder_in.repeat(1, 1, self.dec_resolution[0],
                                        self.dec_resolution[1])
 
-        out = self.decoder_pos_embedding(decoder_in)
-        out = self.decoder(out)
+        out = self.tokenizer.decode(decoder_in)
         # `out` has shape: [B*num_slots, 4, H, W].
 
         out = out.view(bs, num_slots, num_channels + 1, height, width)
