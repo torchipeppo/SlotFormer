@@ -1,5 +1,6 @@
 import copy
 import math
+import einops
 
 import torch
 from torch import nn
@@ -227,8 +228,14 @@ class StoSAVi(BaseModel):
         self.enc_channels = list(self.enc_dict['enc_channels'])  # CNN channels
         self.enc_ks = self.enc_dict['enc_ks']  # kernel size in CNN
         self.enc_norm = self.enc_dict['enc_norm']  # norm in CNN
-        self.visual_resolution = (64, 64)  # CNN out visual resolution
+        self.visual_resolution = self.enc_dict["visual_resolution"]  # CNN out visual resolution
         self.visual_channels = self.enc_channels[-1]  # CNN out visual channels
+
+        num_of_downsample_layers = 0
+        resol_temp = self.resolution[0]
+        while resol_temp > self.visual_resolution[0]:
+            resol_temp /= 2
+            num_of_downsample_layers += 1
 
         enc_layers = len(self.enc_channels) - 1
         self.encoder = nn.Sequential(*[
@@ -237,7 +244,7 @@ class StoSAVi(BaseModel):
                 self.enc_channels[i + 1],
                 kernel_size=self.enc_ks,
                 # 2x downsampling for 128x128 image
-                stride=2 if (i == 0 and self.resolution[0] == 128) else 1,
+                stride=2 if (i < num_of_downsample_layers) else 1,
                 norm=self.enc_norm,
                 act='relu' if i != (enc_layers - 1) else '')
             for i in range(enc_layers)
@@ -252,6 +259,9 @@ class StoSAVi(BaseModel):
             nn.ReLU(),
             nn.Linear(self.enc_out_channels, self.enc_out_channels),
         )
+
+        self.token_embedding = nn.Embedding(self.enc_dict['vocab_size'], self.enc_out_channels)
+        self.token_embedding.weight.data.uniform_(-1.0 / self.enc_dict['vocab_size'], 1.0 / self.enc_dict['vocab_size'])
 
     def _build_decoder(self):
         # Build Decoder
@@ -378,7 +388,24 @@ class StoSAVi(BaseModel):
         encoder_out = encoder_out.permute(0, 2, 1).contiguous()
         encoder_out = self.encoder_out_layer(encoder_out)
         # `encoder_out` has shape: [B, H*W, enc_out_channels]
-        return encoder_out
+
+        # DISCRETIZE/QUANTIZE/TOKENIZE!
+        b, hw, c = encoder_out.shape
+        out_flattened = einops.rearrange(encoder_out, 'b hw c -> (b hw) c')
+        # this line allocates a GROSS amount of memory! It doesn't in the other project!
+        dist_to_embeddings = torch.sum(out_flattened ** 2, dim=1, keepdim=True) + torch.sum(self.token_embedding.weight**2, dim=1) - 2 * torch.matmul(out_flattened, self.token_embedding.weight.t())
+        # Is it a bug? (Though this discussion looks old...)
+        # https://discuss.pytorch.org/t/unexpected-huge-memory-cost-of-matmul/41642
+        # Let's try the suggested alternative
+        ### print(encoder_out.shape)
+        ### print(out_flattened.shape)
+        ### print(self.token_embedding.weight.shape)
+        ### dist_to_embeddings = torch.sum(out_flattened ** 2, dim=1, keepdim=True) + torch.sum(self.token_embedding.weight**2, dim=1) - 2 * torch.bmm(out_flattened, self.token_embedding.weight.t())
+        # no, not that bug, batches are just that much more huge for some reason.
+        tokens = dist_to_embeddings.argmin(dim=-1)
+        out_quantized = einops.rearrange(self.token_embedding(tokens), '(b hw) c -> b hw c', b=b, hw=hw, c=c).contiguous()
+
+        return out_quantized
 
     def encode(self, img, prev_slots=None, *, need_attn=False):
         """Encode from img to slots."""

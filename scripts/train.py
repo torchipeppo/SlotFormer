@@ -73,7 +73,7 @@ def main(params):
     )
 
     method.fit(
-        resume_from=args.weight, san_check_val_step=params.san_check_val_step)
+        resume_from=args.weight, san_check_val_step=params.san_check_val_step, autoload=args.autoload)
 
 
 if __name__ == "__main__":
@@ -81,6 +81,7 @@ if __name__ == "__main__":
     parser.add_argument('--task', type=str, default='base_slots')
     parser.add_argument('--params', type=str, required=True)
     parser.add_argument('--weight', type=str, default='', help='load weight')
+    parser.add_argument('--autoload', action='store_true')
     parser.add_argument('--fp16', action='store_true', help='half-precision')
     parser.add_argument('--ddp', action='store_true', help='DDP training')
     parser.add_argument('--cudnn', action='store_true', help='cudnn benchmark')
@@ -112,5 +113,7 @@ if __name__ == "__main__":
     if args.cudnn:
         torch.backends.cudnn.benchmark = True
         print('INFO: using cudnn benchmark!')
+    if args.weight and args.autoload:
+        raise RuntimeError("Can't have both --weights and --autoload: choose whether to load a specific ckpt or automatically selecting one!")
 
     main(params)

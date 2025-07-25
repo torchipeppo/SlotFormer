@@ -65,8 +65,10 @@ class SlotFormerParams(BaseParams):
     enc_dict = dict(
         enc_channels=(3, 64, 64, 64, 64),
         enc_ks=5,
+        visual_resolution=(32,32),  # was (64,64)
         enc_out_channels=128,
         enc_norm='',
+        vocab_size=1024,  # should be 50304 if possible
     )
 
     # CNN Decoder
