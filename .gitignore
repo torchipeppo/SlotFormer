@@ -4,6 +4,7 @@ data/OBJ3D
 data/CLEVRER
 data/Physion
 data/PHYRE*
+data/interventional_pong/dataset*
 data/*.pkl
 pretrained/*/
 pretrained/*.pth
