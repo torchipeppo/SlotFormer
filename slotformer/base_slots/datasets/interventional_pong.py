@@ -63,7 +63,7 @@ class InterventionalPongDataset(data.Dataset):
         assert occlusion_type in {'black', 'random'}
         super().__init__()
 
-        self.data_folder = Path(data_folder)
+        self.data_folder = Path(__file__).parents[3] / data_folder
         if sample_list_path is not None:
             if isinstance(sample_list_path, str) or isinstance(sample_list_path, Path):
                 data_files = self.extract_sample_list(sample_list_path)
@@ -174,6 +174,9 @@ class InterventionalPongDataset(data.Dataset):
         self.interv_id_reference = interv_id_reference
         self.interv_pics_fnames = np.array(interv_pics_fnames)
         self.num_of_interventions = len(interv_id_reference)
+
+        # for compatibility with Ziyi's framework
+        self.files = torch.zeros(self.imgs.shape[0])
 
     def _clean_up_data(self):
         # Push channels to PyTorch dimension
@@ -332,8 +335,26 @@ class InterventionalPongDataset(data.Dataset):
         
         if self.return_causal_graphs:
             returns["causal_graphs"] = cg_seq
-
-        return returns
+        
+        # adapting to the format this repo wants
+        """Data dict:
+            - img: [T, 3, H, W]
+            - label: 1: success, 0: fail
+            - vid_len: the real length of the video
+        """
+        img = returns["pixel_values"]
+        assert len(img.shape) == 4
+        return {
+            'img': img,
+            'label': 1,
+            'vid_len': img.shape[0]
+        }
+    
+    # for compatibility with Ziyi's framework
+    def get_video(self, idx):
+        sample = self[idx]
+        sample['video'] = sample['img']
+        return sample
 
 def _generate_single_occlusion_mask(image_shape, occlusion_size):
     # taking advantage of the assumption of square images (see assert in __init__)
@@ -343,38 +364,57 @@ def _generate_single_occlusion_mask(image_shape, occlusion_size):
     return occlusion_mask
 
 
+def build_intervpong_dataset(params, val_only=False):
+    args = dict(
+        data_folder=params.data_root,
+        # return_masks,
+        # return_causal_graphs,
+        # occlusion_level,
+        # occlusion_type,
+        seq_len=params.n_sample_frames,
+        resolution=params.resolution[0],
+        norm_range="0-1",
+        sample_list_path=["dataset_simple_eval.txt",],
+    )
+    val_dataset = InterventionalPongDataset(**args)
+    if val_only:
+        return val_dataset
+    args['split'] = ["dataset_simple_train.txt",]
+    train_dataset = InterventionalPongDataset(**args)
+    return train_dataset, val_dataset
 
 
 
 
-def gifify(dataset_dir, interv_name, gifname):
-    SEQ_LEN = 960
-    UPSCALE_FACTOR = 4
-    dataset = InterventionalPongDataset(dataset_dir, seq_len=SEQ_LEN, return_masks=True, return_causal_graphs=True)
-    # dunno what this is for (yet), but I do know that if I turn it on
-    # it won't normalize the images to the range [-1,1],
-    # and that's good enough for this mini test
-    dataset.encodings_active = True
-    sample = dataset.first_for_intervention(interv_name)
-    rgb = einops.rearrange(sample["pixel_values"][:,:3,:,:].numpy(), "time channel width height -> time width height channel")
-    mask = einops.repeat(sample["masks"].numpy(), "time mask height width -> time height (mask width) c", c=3)
-    mask = mask*255  # for the gif
-    full_stuff = np.concat([rgb, mask], axis=2)
-    full_stuff = full_stuff.repeat(UPSCALE_FACTOR, axis=1).repeat(UPSCALE_FACTOR, axis=2)  # blow it up
-    full_stuff = full_stuff.astype(np.uint8)
-    frame_list = [full_stuff[i] for i in range(full_stuff.shape[0])]
-    import imageio
-    imageio.mimwrite(Path(dataset_dir) / gifname, frame_list, format="gif")
 
-if __name__ == "__main__":
-    gifify("dataset_BIGBALLv5a_11envs_142reps_960frames", "intervention0", 'a.gif')
-    gifify("dataset_BIGBALLv5a_11envs_142reps_960frames", "intervention1", 'b.gif')
-    gifify("dataset_BIGBALLv5a_11envs_142reps_960frames", "intervention2", 'c.gif')
-    gifify("dataset_BIGBALLv5a_11envs_142reps_960frames", "intervention16", 'd.gif')
-    gifify("dataset_BIGBALLv5a_11envs_142reps_960frames", "intervention32", 'e.gif')
-    gifify("dataset_BIGBALLv5a_11envs_142reps_960frames", "intervention192", 'f.gif')
-    gifify("dataset_BIGBALLv5a_11envs_142reps_960frames", "intervention256", 'g.gif')
-    gifify("dataset_BIGBALLv5a_11envs_142reps_960frames", "intervention448", 'w.gif')
-    gifify("dataset_BIGBALLv5a_11envs_142reps_960frames", "intervention96", 'x.gif')
-    gifify("dataset_BIGBALLv5a_11envs_142reps_960frames", "intervention3", 'y.gif')
-    gifify("dataset_BIGBALLv5a_11envs_142reps_960frames", "intervention260", 'z.gif')
+# def gifify(dataset_dir, interv_name, gifname):
+#     SEQ_LEN = 960
+#     UPSCALE_FACTOR = 4
+#     dataset = InterventionalPongDataset(dataset_dir, seq_len=SEQ_LEN, return_masks=True, return_causal_graphs=True)
+#     # dunno what this is for (yet), but I do know that if I turn it on
+#     # it won't normalize the images to the range [-1,1],
+#     # and that's good enough for this mini test
+#     dataset.encodings_active = True
+#     sample = dataset.first_for_intervention(interv_name)
+#     rgb = einops.rearrange(sample["pixel_values"][:,:3,:,:].numpy(), "time channel width height -> time width height channel")
+#     mask = einops.repeat(sample["masks"].numpy(), "time mask height width -> time height (mask width) c", c=3)
+#     mask = mask*255  # for the gif
+#     full_stuff = np.concat([rgb, mask], axis=2)
+#     full_stuff = full_stuff.repeat(UPSCALE_FACTOR, axis=1).repeat(UPSCALE_FACTOR, axis=2)  # blow it up
+#     full_stuff = full_stuff.astype(np.uint8)
+#     frame_list = [full_stuff[i] for i in range(full_stuff.shape[0])]
+#     import imageio
+#     imageio.mimwrite(Path(dataset_dir) / gifname, frame_list, format="gif")
+
+# if __name__ == "__main__":
+#     gifify("dataset_BIGBALLv5a_11envs_142reps_960frames", "intervention0", 'a.gif')
+#     gifify("dataset_BIGBALLv5a_11envs_142reps_960frames", "intervention1", 'b.gif')
+#     gifify("dataset_BIGBALLv5a_11envs_142reps_960frames", "intervention2", 'c.gif')
+#     gifify("dataset_BIGBALLv5a_11envs_142reps_960frames", "intervention16", 'd.gif')
+#     gifify("dataset_BIGBALLv5a_11envs_142reps_960frames", "intervention32", 'e.gif')
+#     gifify("dataset_BIGBALLv5a_11envs_142reps_960frames", "intervention192", 'f.gif')
+#     gifify("dataset_BIGBALLv5a_11envs_142reps_960frames", "intervention256", 'g.gif')
+#     gifify("dataset_BIGBALLv5a_11envs_142reps_960frames", "intervention448", 'w.gif')
+#     gifify("dataset_BIGBALLv5a_11envs_142reps_960frames", "intervention96", 'x.gif')
+#     gifify("dataset_BIGBALLv5a_11envs_142reps_960frames", "intervention3", 'y.gif')
+#     gifify("dataset_BIGBALLv5a_11envs_142reps_960frames", "intervention260", 'z.gif')
